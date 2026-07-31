@@ -12,17 +12,31 @@ const sendPubSub = async () => {
         const connection = await amqp.connect(AMQP_URL);
         const channel = await connection.createChannel();
 
-        // Khai báo exchange loại 'fanout' cho mô hình Pub/Sub
+        // Khai báo exchange loại 'fanout' cho mô hình Pub/Sub.
+        // durable: true: Giúp Exchange duy trì sự tồn tại (bền vững) ngay cả khi RabbitMQ Broker bị khởi động lại.
         await channel.assertExchange(FANOUT_EXCHANGE, "fanout", { durable: true });
 
-        // Lấy thông điệp từ dòng lệnh (process.argv) hoặc đặt mặc định
+        // Lấy thông điệp và tên Publisher từ dòng lệnh (process.argv)
+        // Cách dùng:
+        // - node pub.js "Nội dung" (Publisher mặc định)
+        // - node pub.js "PublisherName" "Nội dung message"
         const args = process.argv.slice(2);
-        const message = args.length > 0 ? args.join(" ") : "Thông điệp Pub/Sub mặc định";
+        let publisherName = "Publisher";
+        let message = "Thông điệp Pub/Sub mặc định";
+
+        if (args.length === 1) {
+            message = args[0];
+        } else if (args.length >= 2) {
+            publisherName = args[0];
+            message = args.slice(1).join(" ");
+        }
+
+        const fullPayload = `[${publisherName}] ${message}`;
 
         // Publish tin nhắn tới fanout exchange (routingKey để trống vì fanout broadcast tới tất cả queue bound)
-        channel.publish(FANOUT_EXCHANGE, "", Buffer.from(message));
+        channel.publish(FANOUT_EXCHANGE, "", Buffer.from(fullPayload));
 
-        console.log(`[x] Đã phát (Publish) tin nhắn Pub/Sub: "${message}"`);
+        console.log(`[x] [${publisherName}] Đã phát (Publish) tin nhắn Pub/Sub: "${message}"`);
 
         // Đóng kết nối sau khi gửi thành công
         setTimeout(() => {
