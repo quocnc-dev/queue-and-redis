@@ -6,19 +6,19 @@ const AMQP_URL =
     "amqps://agzdfrad:ChuPum-JIkwdu_8emNMswv-yN9OvohLW@fuji.lmq.cloudamqp.com/agzdfrad";
 const FANOUT_EXCHANGE = "logs_fanout";
 
-// Hàm Publisher phát tin nhắn tới tất cả Subscriber kết nối với Fanout Exchange
+// Hàm Publisher phát tin nhắn broadcast tới tất cả Subscriber qua Fanout Exchange
 const sendPubSub = async () => {
     try {
         const connection = await amqp.connect(AMQP_URL);
         const channel = await connection.createChannel();
 
-        // Khai báo exchange loại 'fanout' cho mô hình Pub/Sub.
+        // Khai báo exchange loại 'fanout' cho mô hình Pub/Sub Broadcast
         // durable: true: Giúp Exchange duy trì sự tồn tại (bền vững) ngay cả khi RabbitMQ Broker bị khởi động lại.
         await channel.assertExchange(FANOUT_EXCHANGE, "fanout", { durable: true });
 
-        // Lấy thông điệp và tên Publisher từ dòng lệnh (process.argv)
+        // Lấy tên Publisher và thông điệp từ dòng lệnh (process.argv)
         // Cách dùng:
-        // - node pub.js "Nội dung" (Publisher mặc định)
+        // - node pub.js "Nội dung message"
         // - node pub.js "PublisherName" "Nội dung message"
         const args = process.argv.slice(2);
         let publisherName = "Publisher";
