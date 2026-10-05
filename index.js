@@ -60,8 +60,8 @@ redisPub.on("error", (err) => console.error("❌ Lỗi Redis:", err));
 // Gửi tin nhắn tới RabbitMQ Topic Exchange
 // Body: { routingKey: string, message: string, persistent?: boolean }
 // ============================================================
-app.post("/topic/send", async (req, res) => {
-    const { routingKey, message, persistent = true } = req.body;
+app.get("/topic/send", async (req, res) => {
+    const { routingKey, message, persistent = true } = req.query;
 
     if (!channel) {
         return res.status(500).json({ error: "RabbitMQ channel chưa được khởi tạo" });
@@ -92,8 +92,8 @@ app.post("/topic/send", async (req, res) => {
 // Broadcast tin nhắn tới tất cả Subscriber qua Fanout Exchange
 // Body: { message: string, publisherName?: string }
 // ============================================================
-app.post("/fanout/send", async (req, res) => {
-    const { message, publisherName = "API" } = req.body;
+app.get("/fanout/send", async (req, res) => {
+    const { message, publisherName = "API" } = req.query;
 
     if (!channel) {
         return res.status(500).json({ error: "RabbitMQ channel chưa được khởi tạo" });
@@ -125,8 +125,8 @@ app.post("/fanout/send", async (req, res) => {
 // Publish tin nhắn tới Redis Pub/Sub channel
 // Body: { channel: string, message: string }
 // ============================================================
-app.post("/redis/send", async (req, res) => {
-    const { channel: redisChannel, message } = req.body;
+app.get("/redis/send", async (req, res) => {
+    const { channel: redisChannel, message } = req.query;
 
     if (!redisChannel || !message) {
         return res.status(400).json({ error: "Thiếu tham số: channel và message là bắt buộc" });
@@ -152,7 +152,7 @@ app.post("/redis/send", async (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 Server đang chạy tại http://localhost:${PORT}`);
     console.log("📌 Các endpoint:");
-    console.log("   POST /topic/send   — RabbitMQ Topic Exchange");
-    console.log("   POST /fanout/send  — RabbitMQ Fanout Exchange");
-    console.log("   POST /redis/send   — Redis Pub/Sub");
+    console.log("   GET /topic/send?routingKey=&message=   — RabbitMQ Topic Exchange");
+    console.log("   GET /fanout/send?message=&publisherName=  — RabbitMQ Fanout Exchange");
+    console.log("   GET /redis/send?channel=&message=         — Redis Pub/Sub");
 });
