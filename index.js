@@ -1,88 +1,158 @@
 const express = require("express");
 const amqp = require("amqplib");
+const Redis = require("ioredis");
 
-const amqpUrl =
+// ============================================================
+// Cấu hình kết nối
+// ============================================================
+const AMQP_URL =
+    process.env.AMQP_URL ||
     "amqps://agzdfrad:ChuPum-JIkwdu_8emNMswv-yN9OvohLW@fuji.lmq.cloudamqp.com/agzdfrad";
 
-const PORT = 3000;
-const EXCHANGE_NAME = "test_exchange";
-const FANOUT_EXCHANGE = "logs_fanout";
-const app = express();
+const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 
+const PORT = process.env.PORT || 3000;
+
+// Exchange names khớp với pubtopic.js và pubfanout.js
+const TOPIC_EXCHANGE = "amq.topic";
+const FANOUT_EXCHANGE = "amq_fanout";
+
+// ============================================================
+// Khởi tạo Express
+// ============================================================
+const app = express();
 app.use(express.json());
 
+// ============================================================
+// Khởi tạo RabbitMQ channel (dùng chung)
+// ============================================================
 let channel;
 
-// Khởi tạo RabbitMQ một lần duy nhất khi server start
 async function initRabbitMQ() {
     try {
-        const connection = await amqp.connect(amqpUrl);
+        const connection = await amqp.connect(AMQP_URL);
         channel = await connection.createChannel();
 
-        // Đảm bảo exchange tồn tại với type là 'topic'
-        await channel.assertExchange(EXCHANGE_NAME, "topic", { durable: true });
+        // Khai báo Topic Exchange
+        await channel.assertExchange(TOPIC_EXCHANGE, "topic", { durable: true });
 
-        // Đảm bảo exchange tồn tại với type là 'fanout' cho Pub/Sub
+        // Khai báo Fanout Exchange
         await channel.assertExchange(FANOUT_EXCHANGE, "fanout", { durable: true });
 
-        console.log("✅ Connected to RabbitMQ, Topic & Fanout Exchanges asserted");
+        console.log("✅ Đã kết nối RabbitMQ — Topic & Fanout Exchanges sẵn sàng");
     } catch (error) {
-        console.error("❌ RabbitMQ Initialization Error:", error);
+        console.error("❌ Lỗi khởi tạo RabbitMQ:", error);
     }
 }
 
 initRabbitMQ();
 
-app.post("/send", async (req, res) => {
-    const { message, routingKey } = req.body;
+// ============================================================
+// Khởi tạo Redis Publisher client
+// ============================================================
+const redisPub = new Redis(REDIS_URL);
+
+redisPub.on("connect", () => console.log("✅ Đã kết nối Redis Publisher"));
+redisPub.on("error", (err) => console.error("❌ Lỗi Redis:", err));
+
+// ============================================================
+// ROUTE: POST /topic/send
+// Gửi tin nhắn tới RabbitMQ Topic Exchange
+// Body: { routingKey: string, message: string, persistent?: boolean }
+// ============================================================
+app.post("/topic/send", async (req, res) => {
+    const { routingKey, message, persistent = true } = req.body;
 
     if (!channel) {
-        return res.status(500).send({ error: "RabbitMQ channel not initialized" });
+        return res.status(500).json({ error: "RabbitMQ channel chưa được khởi tạo" });
+    }
+
+    if (!routingKey || !message) {
+        return res.status(400).json({ error: "Thiếu tham số: routingKey và message là bắt buộc" });
     }
 
     try {
-        // Publish message với routing key cụ thể
-        channel.publish(EXCHANGE_NAME, routingKey, Buffer.from(message));
+        channel.publish(TOPIC_EXCHANGE, routingKey, Buffer.from(message), {
+            persistent,
+        });
 
-        res.status(200).send({
-            message: "Message sent via Topic Exchange",
-            data: {
-                message,
-                exchange: EXCHANGE_NAME,
-                routingKey,
-            },
+        res.status(200).json({
+            success: true,
+            message: "Đã gửi tin nhắn qua Topic Exchange",
+            data: { exchange: TOPIC_EXCHANGE, routingKey, message, persistent },
         });
     } catch (error) {
-        res.status(500).send({ error: "Failed to publish message" });
+        console.error("❌ Lỗi gửi Topic:", error);
+        res.status(500).json({ error: "Không thể publish tin nhắn" });
     }
 });
 
-// Endpoint mới phát tán thông điệp Pub/Sub qua Fanout Exchange
-app.post("/pubsub/send", async (req, res) => {
-    const { message } = req.body;
+// ============================================================
+// ROUTE: POST /fanout/send
+// Broadcast tin nhắn tới tất cả Subscriber qua Fanout Exchange
+// Body: { message: string, publisherName?: string }
+// ============================================================
+app.post("/fanout/send", async (req, res) => {
+    const { message, publisherName = "API" } = req.body;
 
     if (!channel) {
-        return res.status(500).send({ error: "RabbitMQ channel not initialized" });
+        return res.status(500).json({ error: "RabbitMQ channel chưa được khởi tạo" });
+    }
+
+    if (!message) {
+        return res.status(400).json({ error: "Thiếu tham số: message là bắt buộc" });
     }
 
     try {
-        // Publish message tới fanout exchange (routingKey để trống)
-        channel.publish(FANOUT_EXCHANGE, "", Buffer.from(message || "Default PubSub Message"));
+        const fullPayload = `[${publisherName}] ${message}`;
 
-        res.status(200).send({
-            message: "Message broadcasted via Fanout Exchange (Pub/Sub)",
-            data: {
-                message,
-                exchange: FANOUT_EXCHANGE,
-            },
+        // Fanout không dùng routingKey — để chuỗi rỗng
+        channel.publish(FANOUT_EXCHANGE, "", Buffer.from(fullPayload));
+
+        res.status(200).json({
+            success: true,
+            message: "Đã broadcast tin nhắn qua Fanout Exchange",
+            data: { exchange: FANOUT_EXCHANGE, publisherName, message, payload: fullPayload },
         });
     } catch (error) {
-        res.status(500).send({ error: "Failed to broadcast Pub/Sub message" });
+        console.error("❌ Lỗi gửi Fanout:", error);
+        res.status(500).json({ error: "Không thể broadcast tin nhắn" });
     }
 });
 
+// ============================================================
+// ROUTE: POST /redis/send
+// Publish tin nhắn tới Redis Pub/Sub channel
+// Body: { channel: string, message: string }
+// ============================================================
+app.post("/redis/send", async (req, res) => {
+    const { channel: redisChannel, message } = req.body;
+
+    if (!redisChannel || !message) {
+        return res.status(400).json({ error: "Thiếu tham số: channel và message là bắt buộc" });
+    }
+
+    try {
+        await redisPub.publish(redisChannel, message);
+
+        res.status(200).json({
+            success: true,
+            message: "Đã publish tin nhắn qua Redis Pub/Sub",
+            data: { channel: redisChannel, message },
+        });
+    } catch (error) {
+        console.error("❌ Lỗi gửi Redis:", error);
+        res.status(500).json({ error: "Không thể publish tin nhắn Redis" });
+    }
+});
+
+// ============================================================
+// Khởi động server
+// ============================================================
 app.listen(PORT, () => {
-    console.log(`🚀 Server started on port ${PORT}`);
+    console.log(`🚀 Server đang chạy tại http://localhost:${PORT}`);
+    console.log("📌 Các endpoint:");
+    console.log("   POST /topic/send   — RabbitMQ Topic Exchange");
+    console.log("   POST /fanout/send  — RabbitMQ Fanout Exchange");
+    console.log("   POST /redis/send   — Redis Pub/Sub");
 });
-
-
